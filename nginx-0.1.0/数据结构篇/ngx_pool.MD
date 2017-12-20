@@ -1,4 +1,6 @@
 # nginx_pool源码解析
+## 前言
+一直都听说nginx的内存管理比较好，所以这里从0.1.0版本开始看，低版本也许有很多可以优化的地方，但是更能看清楚nginx模块最初的逻辑，这里讲解的可能会跟网上有不一样的地方,这个也是最原始代码，但是会该类文章会讲解每个版本的变动是什么，这样就能更好的更简单的去理解nginx
 ## 1.数据结构
 
 ```c
@@ -20,6 +22,7 @@ struct ngx_pool_s {
  
 ```
 
+nginx的内存池是一个很好的设计，在程序关闭的时候能够一次free掉所有的内存，nginx把内存分成两种类型 `ngx_pool_s`和` ngx_pool_large_s` ，分别是小内存块和大内存块，那什么样的内存叫做小内存块？在nginx的定义中只要小于页内存并且小于当前内存池内存块内存的都是小内存块，反之是大内存块
 ## 创建pool
 
 ```c
@@ -52,7 +55,7 @@ void *ngx_palloc(ngx_pool_t *pool, size_t size)
     char              *m;
     ngx_pool_t        *p, *n;
     ngx_pool_large_t  *large, *last;
-
+    //size小于页内存并且小于当前当前内存池的内存块的内存
     if (size <= (size_t) NGX_MAX_ALLOC_FROM_POOL
         && size <= (size_t) (pool->end - (char *) pool) - sizeof(ngx_pool_t))
     {
@@ -136,10 +139,79 @@ void *ngx_palloc(ngx_pool_t *pool, size_t size)
     return p;
 }
 ```
+
+## 内存销毁
+
+```c
+//遍历所有内存块节点销毁指定的p区域的内存
+ngx_int_t ngx_pfree(ngx_pool_t *pool, void *p)
+{
+    ngx_pool_large_t  *l;
+
+    for (l = pool->large; l; l = l->next) {
+        if (p == l->alloc) {
+            ngx_log_debug1(NGX_LOG_DEBUG_ALLOC, pool->log, 0,
+                           "free: " PTR_FMT, l->alloc);
+            free(l->alloc);
+            l->alloc = NULL;
+
+            return NGX_OK;
+        }
+    }
+
+    return NGX_DECLINED;
+}
+//销毁所有内存
+void ngx_destroy_pool(ngx_pool_t *pool)
+{
+    ngx_pool_t        *p, *n;
+    ngx_pool_large_t  *l;
+    //优先销毁large内存
+    for (l = pool->large; l; l = l->next) {
+
+        ngx_log_debug1(NGX_LOG_DEBUG_ALLOC, pool->log, 0,
+                       "free: " PTR_FMT, l->alloc);
+        //判断是否分配了内存 如果分配了直接free
+        if (l->alloc) {
+            free(l->alloc);
+        }
+    }
+//如果开启了nginx debug 就打印 pool中的内存情况
+#if (NGX_DEBUG)
+
+    /*
+     * we could allocate the pool->log from this pool
+     * so we can not use this log while the free()ing the pool
+     */
+
+    for (p = pool, n = pool->next; /* void */; p = n, n = n->next) {
+        ngx_log_debug2(NGX_LOG_DEBUG_ALLOC, pool->log, 0,
+                       "free: " PTR_FMT ", unused: " SIZE_T_FMT,
+                       p, p->end - p->last);
+
+        if (n == NULL) {
+            break;
+        }
+    }
+
+#endif
+    //销毁正常的内存 poll
+    for (p = pool, n = pool->next; /* void */; p = n, n = n->next) {
+        free(p);
+
+        if (n == NULL) {
+            break;
+        }
+    }
+}
+```
 待解决问题
 1.ngx_align为什么需要内存对齐
+2.画图使用内存池的时候内存分布情况
 
 
 参考
+内存分部情况
+https://www.cnblogs.com/xiekeli/archive/2012/10/17/2727432.html
 http://blog.csdn.net/daniel_ustc/article/details/11645293
 http://lib.csdn.net/article/liveplay/47854
