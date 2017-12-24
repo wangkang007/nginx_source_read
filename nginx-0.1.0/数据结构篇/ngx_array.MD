@@ -92,5 +92,3 @@ void *ngx_push_array(ngx_array_t *a)
 }
 ```
 
-参考
-http://blog.csdn.net/daniel_ustc/article/details/11645293
